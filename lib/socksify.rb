@@ -93,7 +93,7 @@ end
 
 class TCPSocket
   @@socks_version ||= "5"
-  
+
   def self.socks_version
     (@@socks_version == "4a" or @@socks_version == "4") ? "\004" : "\005"
   end
@@ -129,6 +129,12 @@ class TCPSocket
   end
   def self.socks_ignores=(ignores)
     @@socks_ignores = ignores
+  end
+  def self.socks_retry_connection
+    @@socks_retry_connection ||= false
+  end
+  def self.socks_retry_connection=(socks_retry_connection)
+    @@socks_retry_connection = socks_retry_connection
   end
 
   class SOCKSConnectionPeerAddress < String
@@ -166,13 +172,22 @@ class TCPSocket
 
     if socks_server and socks_port and not socks_ignores.include?(host)
       Socksify::debug_notice "Connecting to SOCKS server #{socks_server}:#{socks_port}"
-      initialize_tcp socks_server, socks_port
-
-      socks_authenticate unless @@socks_version =~ /^4/
-
-      if host
-        socks_connect(host, port)
+      begin
+        initialize_tcp socks_server, socks_port
+        socks_authenticate unless @@socks_version =~ /^4/
+        if host
+          socks_connect(host, port)
+        end
+      rescue StandardError => e
+        if @@socks_retry_connection
+          Socksify::debug_notice "Failed to connect to SOCKS server. Error: #{e.message}"
+          sleep 5
+          retry
+        else
+          raise e
+        end
       end
+
     else
       Socksify::debug_notice "Connecting directly to #{host}:#{port}"
       initialize_tcp host, port, local_host, local_port
@@ -336,7 +351,7 @@ module Socksify
         s.write "\xF0\000\003" + [host.size].pack('C') + host
       end
       s.write [0].pack('n')  # Port
-      
+
       addr, _port = s.socks_receive_reply
       Socksify::debug_notice "Resolved #{host} as #{addr} over SOCKS"
       addr
